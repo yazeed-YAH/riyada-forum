@@ -21,36 +21,8 @@ function formatDateArabic(date: Date): string {
   })
 }
 
-// تحميل الصورة وتحويلها إلى base64
-async function fetchImageAsBase64(imageUrl: string): Promise<{ content: string; contentType: string } | null> {
-  try {
-    console.log('Fetching image:', imageUrl)
-    const response = await fetch(imageUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; RiyadaForum/1.0)'
-      },
-      signal: AbortSignal.timeout(10000)
-    })
-    
-    if (!response.ok) {
-      console.log('Failed to fetch image:', response.status)
-      return null
-    }
-    
-    const contentType = response.headers.get('content-type') || 'image/png'
-    const buffer = await response.arrayBuffer()
-    const base64 = Buffer.from(buffer).toString('base64')
-    
-    console.log('Image fetched successfully, size:', base64.length)
-    return { content: base64, contentType }
-  } catch (error) {
-    console.error('Error fetching image:', error)
-    return null
-  }
-}
-
 // دالة لإنشاء PDF الدعوة
-async function generateInvitationPDF(params: { name: string; event: any; sponsors: any[] }): Promise<string> {
+async function generateInvitationPDF(params: { name: string; event: any }): Promise<string> {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -127,20 +99,6 @@ async function generateInvitationPDF(params: { name: string; event: any; sponsor
     doc.text(params.event.guestName, 70, 205)
   }
   
-  if (params.sponsors.length > 0) {
-    doc.setDrawColor(200, 180, 190)
-    doc.line(20, 225, pageWidth - 20, 225)
-    
-    doc.setTextColor(168, 85, 111)
-    doc.setFontSize(14)
-    doc.text('Sponsored by', pageWidth / 2, 245, { align: 'center' })
-    
-    doc.setTextColor(45, 31, 38)
-    doc.setFontSize(11)
-    const sponsorNames = params.sponsors.map(s => s.sponsorName).join(' | ')
-    doc.text(sponsorNames, pageWidth / 2, 260, { align: 'center' })
-  }
-  
   // Footer
   doc.setFillColor(168, 85, 111)
   doc.rect(0, pageHeight - 30, pageWidth, 30, 'F')
@@ -180,31 +138,11 @@ export async function POST(request: NextRequest) {
 
     // جلب فعالية للاختبار
     let event = null
-    let sponsors: Array<{ sponsorId: string; sponsorName: string; logoUrl: string | null }> = []
 
     if (eventId) {
       event = await db.event.findUnique({
         where: { id: eventId }
       })
-      
-      const eventSponsors = await db.eventSponsor.findMany({
-        where: { eventId },
-        include: {
-          sponsor: {
-            select: {
-              id: true,
-              companyName: true,
-              logoUrl: true,
-            }
-          }
-        }
-      })
-      
-      sponsors = eventSponsors.map(es => ({
-        sponsorId: es.sponsor.id,
-        sponsorName: es.sponsor.companyName,
-        logoUrl: es.sponsor.logoUrl,
-      }))
     }
 
     if (!event) {
@@ -212,27 +150,6 @@ export async function POST(request: NextRequest) {
         where: { isPublished: true },
         orderBy: { date: 'desc' }
       })
-      
-      if (event) {
-        const eventSponsors = await db.eventSponsor.findMany({
-          where: { eventId: event.id },
-          include: {
-            sponsor: {
-              select: {
-                id: true,
-                companyName: true,
-                logoUrl: true,
-              }
-            }
-          }
-        })
-        
-        sponsors = eventSponsors.map(es => ({
-          sponsorId: es.sponsor.id,
-          sponsorName: es.sponsor.companyName,
-          logoUrl: es.sponsor.logoUrl,
-        }))
-      }
     }
 
     const eventTitle = event?.title || 'اللقاء الافتتاحي'
@@ -247,80 +164,13 @@ export async function POST(request: NextRequest) {
 
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
 
-    // تحميل شعارات الرعاة وإضافتها كمرفقات inline
-    console.log('Fetching sponsor logos...')
-    const sponsorAttachments: Array<{
-      filename: string
-      content: string
-      content_type: string
-      content_id?: string
-    }> = []
-    
-    const sponsorItemsHtml: string[] = []
-    
-    for (let i = 0; i < sponsors.length; i++) {
-      const sponsor = sponsors[i]
-      const cid = `sponsor-logo-${i}`
-      
-      if (sponsor.logoUrl) {
-        const imageData = await fetchImageAsBase64(sponsor.logoUrl)
-        
-        if (imageData) {
-          // إضافة كمرفق inline مع content_id
-          sponsorAttachments.push({
-            filename: `sponsor-${i}.png`,
-            content: imageData.content,
-            content_type: imageData.contentType,
-            content_id: cid
-          })
-          
-          // استخدام cid في HTML
-          sponsorItemsHtml.push(`
-            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
-              <img src="cid:${cid}" alt="${sponsor.sponsorName}" width="100" height="50" style="height: 50px; max-width: 120px; width: auto; display: block; margin: 0 auto; object-fit: contain;" />
-            </td>
-          `)
-          console.log(`Sponsor ${sponsor.sponsorName}: attached with cid:${cid}`)
-        } else {
-          sponsorItemsHtml.push(`
-            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
-              <span style="color: #a8556f; font-size: 14px; font-weight: 600; white-space: nowrap;">${sponsor.sponsorName}</span>
-            </td>
-          `)
-          console.log(`Sponsor ${sponsor.sponsorName}: failed to load, showing name only`)
-        }
-      } else {
-        sponsorItemsHtml.push(`
-          <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
-            <span style="color: #a8556f; font-size: 14px; font-weight: 600; white-space: nowrap;">${sponsor.sponsorName}</span>
-          </td>
-        `)
-      }
-    }
-
     // إنشاء PDF الدعوة
     console.log('Generating PDF...')
     const pdfBase64 = await generateInvitationPDF({
       name: recipientName,
-      event: event || { title: eventTitle, date: new Date(), location: eventLocation },
-      sponsors: sponsors
+      event: event || { title: eventTitle, date: new Date(), location: eventLocation }
     })
     console.log('PDF generated, size:', pdfBase64.length)
-
-    // بناء HTML للرعاة
-    let sponsorsHtml = ''
-    if (sponsorItemsHtml.length > 0) {
-      sponsorsHtml = `
-        <div style="margin: 24px 0; padding: 20px; background-color: #fdf8f9; border-radius: 12px; text-align: center;">
-          <p style="color: #a8556f; font-size: 16px; font-weight: 600; margin: 0 0 16px 0;">✨ برعاية</p>
-          <table role="presentation" align="center" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
-            <tr>
-              ${sponsorItemsHtml.join('<td style="width: 12px;"></td>\n')}
-            </tr>
-          </table>
-        </div>
-      `
-    }
 
     // بناء HTML لضيف الشرف
     const guestHtml = guestName ? `
@@ -368,8 +218,6 @@ export async function POST(request: NextRequest) {
             </tr>
           </table>
         </div>
-        
-        ${sponsorsHtml}
         
         <div style="background-color: #e8f5e9; border-radius: 12px; padding: 16px; margin: 20px 0; border-right: 4px solid #3a7d44;">
           <p style="color: #2e7d32; margin: 0; font-size: 15px; font-weight: 600;">
@@ -432,18 +280,6 @@ export async function POST(request: NextRequest) {
       </html>
     `
 
-    // إعداد المرفقات - PDF + شعارات الرعاة
-    const allAttachments = [
-      {
-        filename: `دعوة-${eventTitle.replace(/\s+/g, '-')}.pdf`,
-        content: pdfBase64,
-        content_type: 'application/pdf'
-      },
-      ...sponsorAttachments
-    ]
-
-    console.log('Total attachments:', allAttachments.length)
-
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -455,7 +291,13 @@ export async function POST(request: NextRequest) {
         to: [recipientEmail],
         subject: `تم تأكيد تسجيلك في ${eventTitle} 👑`,
         html: fullHtml,
-        attachments: allAttachments
+        attachments: [
+          {
+            filename: `دعوة-${eventTitle.replace(/\s+/g, '-')}.pdf`,
+            content: pdfBase64,
+            content_type: 'application/pdf'
+          }
+        ]
       }),
     })
 
@@ -467,8 +309,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ 
         success: true, 
         message: `تم إرسال الإيميل بنجاح إلى ${recipientEmail}`,
-        sponsors: sponsors.length,
-        sponsorsWithLogos: sponsorAttachments.length,
         event: eventTitle,
         response: responseText
       })
