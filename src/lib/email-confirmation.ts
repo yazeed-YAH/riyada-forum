@@ -1,4 +1,5 @@
 import { db } from '@/lib/db'
+import jsPDF from 'jspdf'
 
 interface EventData {
   id: string
@@ -52,6 +53,120 @@ function formatDateArabic(date: Date): string {
   })
 }
 
+// دالة لإنشاء PDF الدعوة
+async function generateInvitationPDF(params: SendConfirmationEmailParams): Promise<string> {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  })
+
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  
+  // Background gradient effect (simulated with rectangles)
+  doc.setFillColor(253, 248, 249) // #fdf8f9
+  doc.rect(0, 0, pageWidth, pageHeight, 'F')
+  
+  // Header background
+  doc.setFillColor(168, 85, 111) // #a8556f
+  doc.rect(0, 0, pageWidth, 50, 'F')
+  
+  // Title
+  doc.setTextColor(255, 255, 255)
+  doc.setFontSize(28)
+  doc.text('Riyada Forum', pageWidth / 2, 25, { align: 'center' })
+  doc.setFontSize(14)
+  doc.text('Business Women Community', pageWidth / 2, 38, { align: 'center' })
+  
+  // Decorative line
+  doc.setDrawColor(200, 180, 190)
+  doc.setLineWidth(0.5)
+  doc.line(20, 60, pageWidth - 20, 60)
+  
+  // Invitation text
+  doc.setTextColor(45, 31, 38) // #2d1f26
+  doc.setFontSize(24)
+  doc.text('Invitation', pageWidth / 2, 80, { align: 'center' })
+  
+  // Guest name
+  doc.setTextColor(168, 85, 111)
+  doc.setFontSize(22)
+  doc.text(params.name, pageWidth / 2, 100, { align: 'center' })
+  
+  // Event title
+  doc.setTextColor(45, 31, 38)
+  doc.setFontSize(18)
+  doc.text(params.event.title, pageWidth / 2, 125, { align: 'center' })
+  
+  // Event details box
+  doc.setFillColor(253, 242, 244) // #fdf2f4
+  doc.roundedRect(20, 140, pageWidth - 40, 70, 5, 5, 'F')
+  
+  doc.setFontSize(12)
+  doc.setTextColor(107, 90, 96) // #6b5a60
+  
+  // Date
+  const eventDateStr = formatDateArabic(new Date(params.event.date))
+  doc.text('Date:', 30, 160)
+  doc.setTextColor(45, 31, 38)
+  doc.text(eventDateStr, 70, 160)
+  
+  // Time
+  doc.setTextColor(107, 90, 96)
+  doc.text('Time:', 30, 175)
+  doc.setTextColor(45, 31, 38)
+  const eventTimeStr = params.event.startTime 
+    ? `${formatTime12(params.event.startTime)} - ${formatTime12(params.event.endTime)}`
+    : 'TBD'
+  doc.text(eventTimeStr, 70, 175)
+  
+  // Location
+  doc.setTextColor(107, 90, 96)
+  doc.text('Location:', 30, 190)
+  doc.setTextColor(45, 31, 38)
+  doc.text(params.event.location || 'TBD', 70, 190)
+  
+  // Guest of Honor
+  if (params.event.guestName) {
+    doc.setTextColor(107, 90, 96)
+    doc.text('Guest of Honor:', 30, 205)
+    doc.setTextColor(168, 85, 111)
+    doc.text(params.event.guestName, 70, 205)
+  }
+  
+  // Sponsors section
+  if (params.sponsors.length > 0) {
+    doc.setDrawColor(200, 180, 190)
+    doc.line(20, 225, pageWidth - 20, 225)
+    
+    doc.setTextColor(168, 85, 111)
+    doc.setFontSize(14)
+    doc.text('Sponsored by', pageWidth / 2, 245, { align: 'center' })
+    
+    doc.setTextColor(45, 31, 38)
+    doc.setFontSize(11)
+    const sponsorNames = params.sponsors.map(s => s.sponsorName).join(' | ')
+    doc.text(sponsorNames, pageWidth / 2, 260, { align: 'center' })
+  }
+  
+  // Footer
+  doc.setFillColor(168, 85, 111)
+  doc.rect(0, pageHeight - 30, pageWidth, 30, 'F')
+  
+  doc.setTextColor(255, 255, 255)
+  doc.setFontSize(10)
+  doc.text('riyada.yplus.ai', pageWidth / 2, pageHeight - 12, { align: 'center' })
+  
+  // Border
+  doc.setDrawColor(168, 85, 111)
+  doc.setLineWidth(1)
+  doc.rect(5, 5, pageWidth - 10, pageHeight - 10)
+  
+  // Return base64 encoded PDF
+  return doc.output('base64')
+}
+
 // دالة لإرسال إيميل تأكيد القبول
 export async function sendConfirmationEmail(params: SendConfirmationEmailParams): Promise<EmailResult> {
   try {
@@ -90,6 +205,11 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
       : ''
 
     const subject = `تم تأكيد تسجيلك في ${params.event.title} 👑`
+
+    // إنشاء PDF الدعوة
+    console.log('Generating invitation PDF...')
+    const pdfBase64 = await generateInvitationPDF(params)
+    console.log('PDF generated successfully, size:', pdfBase64.length, 'characters')
 
     // بناء HTML للرعاة - مع دعم الصور
     let sponsorsHtml = ''
@@ -241,6 +361,7 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
     
     console.log('From:', `${fromName} <${fromEmail}>`)
 
+    // إرسال الإيميل مع المرفق
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -252,6 +373,13 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
         to: [params.to],
         subject: subject,
         html: fullHtml,
+        attachments: [
+          {
+            filename: `دعوة-${params.event.title.replace(/\s+/g, '-')}.pdf`,
+            content: pdfBase64,
+            content_type: 'application/pdf'
+          }
+        ]
       }),
     })
 
