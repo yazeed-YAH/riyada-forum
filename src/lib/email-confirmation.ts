@@ -1,5 +1,6 @@
 import { db } from '@/lib/db'
 import jsPDF from 'jspdf'
+import Resend from 'resend'
 
 interface EventData {
   id: string
@@ -46,7 +47,7 @@ function formatDateArabic(date: Date): string {
 }
 
 // دالة لإنشاء PDF الدعوة
-async function generateInvitationPDF(params: SendConfirmationEmailParams): Promise<string> {
+async function generateInvitationPDF(params: SendConfirmationEmailParams): Promise<Buffer> {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -136,7 +137,9 @@ async function generateInvitationPDF(params: SendConfirmationEmailParams): Promi
   doc.setLineWidth(1)
   doc.rect(5, 5, pageWidth - 10, pageHeight - 10)
   
-  return doc.output('base64')
+  // Return as Buffer
+  const pdfOutput = doc.output('arraybuffer')
+  return Buffer.from(pdfOutput)
 }
 
 // دالة لإرسال إيميل تأكيد القبول
@@ -179,8 +182,8 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
 
     // إنشاء PDF الدعوة
     console.log('Generating invitation PDF...')
-    const pdfBase64 = await generateInvitationPDF(params)
-    console.log('PDF generated successfully')
+    const pdfBuffer = await generateInvitationPDF(params)
+    console.log('PDF generated successfully, size:', pdfBuffer.length, 'bytes')
 
     // بناء HTML لضيف الشرف
     const guestHtml = params.event.guestName ? `
@@ -296,52 +299,33 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
     
     console.log('From:', `${fromName} <${fromEmail}>`)
 
-    // إنشاء اسم ملف آمن (إنجليزي)
-    const safeFileName = `riyada-invitation-${Date.now()}.pdf`
+    // استخدام Resend SDK
+    const resend = new Resend({ apiKey: resendApiKey })
     
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${resendApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: `${fromName} <${fromEmail}>`,
-        to: [params.to],
-        subject: subject,
-        html: fullHtml,
-        attachments: [
-          {
-            filename: safeFileName,
-            content: pdfBase64,
-            contentType: 'application/pdf'
-          }
-        ]
-      }),
+    const { data, error } = await resend.emails.send({
+      from: `${fromName} <${fromEmail}>`,
+      to: [params.to],
+      subject: subject,
+      html: fullHtml,
+      attachments: [
+        {
+          filename: 'riyada-invitation.pdf',
+          content: pdfBuffer,
+        }
+      ]
     })
 
-    const responseText = await response.text()
-    console.log('Resend API response status:', response.status)
-    console.log('Resend API response:', responseText.substring(0, 500))
-    
-    if (response.ok) {
-      console.log('Confirmation email sent successfully to:', params.to)
-      return { success: true }
-    } else {
-      console.error('Failed to send confirmation email:', responseText)
-      let errorDetails = responseText
-      try {
-        const errorJson = JSON.parse(responseText)
-        errorDetails = errorJson.message || errorJson.error?.message || responseText
-      } catch {
-        // Keep original text if not JSON
-      }
+    if (error) {
+      console.error('Resend SDK error:', error)
       return { 
         success: false, 
         error: 'فشل إرسال الإيميل', 
-        details: errorDetails
+        details: JSON.stringify(error)
       }
     }
+
+    console.log('Confirmation email sent successfully:', data)
+    return { success: true }
   } catch (error) {
     console.error('Error sending confirmation email:', error)
     return { 
