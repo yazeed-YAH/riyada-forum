@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { sendConfirmationEmailForRegistration } from '@/lib/email-confirmation'
 
 // PATCH - تحديث بيانات التسجيل
 export async function PATCH(
@@ -9,7 +10,7 @@ export async function PATCH(
   try {
     const { id } = await params
     const body = await request.json()
-    const { status, notes, name, email, phone, companyName, jobTitle, gender, imageUrl } = body
+    const { status, notes, name, email, phone, companyName, jobTitle, gender, imageUrl, sendEmail } = body
 
     // بناء كائن البيانات للتحديث
     const updateData: {
@@ -44,7 +45,19 @@ export async function PATCH(
       data: updateData
     })
 
-    return NextResponse.json({ registration })
+    // إذا تم التأكيد، إرسال إيميل تلقائياً
+    let emailResult = null
+    if (status === 'confirmed' && sendEmail !== false) {
+      console.log('Sending confirmation email for registration:', id)
+      emailResult = await sendConfirmationEmailForRegistration(id)
+      console.log('Email result:', emailResult)
+    }
+
+    return NextResponse.json({ 
+      registration,
+      emailSent: emailResult?.success || false,
+      emailError: emailResult?.error
+    })
   } catch (error) {
     console.error('Error updating registration:', error)
     return NextResponse.json(
