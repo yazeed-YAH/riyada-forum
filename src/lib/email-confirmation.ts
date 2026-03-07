@@ -53,6 +53,31 @@ function formatDateArabic(date: Date): string {
   })
 }
 
+// تحويل رابط الصورة إلى base64
+async function imageToBase64(imageUrl: string): Promise<string | null> {
+  try {
+    console.log('Converting image to base64:', imageUrl)
+    const response = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; RiyadaForum/1.0)'
+      }
+    })
+    
+    if (!response.ok) {
+      console.log('Failed to fetch image:', response.status)
+      return null
+    }
+    
+    const contentType = response.headers.get('content-type') || 'image/png'
+    const buffer = await response.arrayBuffer()
+    const base64 = Buffer.from(buffer).toString('base64')
+    return `data:${contentType};base64,${base64}`
+  } catch (error) {
+    console.error('Error converting image to base64:', error)
+    return null
+  }
+}
+
 // دالة لإنشاء PDF الدعوة
 async function generateInvitationPDF(params: SendConfirmationEmailParams): Promise<string> {
   const doc = new jsPDF({
@@ -174,6 +199,7 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
     console.log('Recipient:', params.to)
     console.log('Name:', params.name)
     console.log('Event:', params.event.title)
+    console.log('Sponsors count:', params.sponsors.length)
 
     const resendApiKey = process.env.RESEND_API_KEY
     console.log('RESEND_API_KEY exists:', !!resendApiKey)
@@ -211,21 +237,35 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
     const pdfBase64 = await generateInvitationPDF(params)
     console.log('PDF generated successfully, size:', pdfBase64.length, 'characters')
 
-    // بناء HTML للرعاة - مع دعم الصور
-    let sponsorsHtml = ''
-    if (params.sponsors.length > 0) {
-      const sponsorItems = params.sponsors.map(s => {
+    // تحويل شعارات الرعاة إلى base64
+    console.log('Processing sponsor logos...')
+    const sponsorsWithBase64 = await Promise.all(
+      params.sponsors.map(async (s) => {
         if (s.logoUrl) {
-          // إذا يوجد شعار، نعرضه كصورة
+          const base64Logo = await imageToBase64(s.logoUrl)
+          console.log(`Sponsor ${s.sponsorName}: base64 ${base64Logo ? 'success' : 'failed'}`)
+          return { ...s, base64Logo }
+        }
+        return { ...s, base64Logo: null }
+      })
+    )
+
+    // بناء HTML للرعاة - مع صور base64
+    let sponsorsHtml = ''
+    if (sponsorsWithBase64.length > 0) {
+      const sponsorItems = sponsorsWithBase64.map((s, index) => {
+        const uniqueId = `sponsor-${index}-${Date.now()}`
+        if (s.base64Logo) {
+          // صورة بـ base64
           return `
-            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle;">
-              <img src="${s.logoUrl}" alt="${s.sponsorName}" style="height: 50px; max-width: 120px; width: auto; display: block; margin: 0 auto;" />
+            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
+              <img src="${s.base64Logo}" alt="${s.sponsorName}" width="100" height="50" style="height: 50px; max-width: 120px; width: auto; display: block; margin: 0 auto; object-fit: contain;" />
             </td>
           `
         } else {
-          // إذا ما يوجد شعار، نعرض اسم الراعي
+          // اسم فقط
           return `
-            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle;">
+            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
               <span style="color: #a8556f; font-size: 14px; font-weight: 600; white-space: nowrap;">${s.sponsorName}</span>
             </td>
           `
@@ -233,7 +273,7 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
       }).join('<td style="width: 12px;"></td>\n')
       
       sponsorsHtml = `
-        <div style="margin: 24px 0; padding: 20px; background: linear-gradient(135deg, #fdf2f4 0%, #fdf8f9 100%); border-radius: 12px; text-align: center;">
+        <div style="margin: 24px 0; padding: 20px; background-color: #fdf8f9; border-radius: 12px; text-align: center;">
           <p style="color: #a8556f; font-size: 16px; font-weight: 600; margin: 0 0 16px 0;">✨ برعاية</p>
           <table role="presentation" align="center" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
             <tr>
@@ -246,7 +286,7 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
 
     // بناء HTML لضيف الشرف
     const guestHtml = params.event.guestName ? `
-      <div style="text-align: center; margin: 20px 0; padding: 16px; background: #fdf8f9; border-radius: 12px;">
+      <div style="text-align: center; margin: 20px 0; padding: 16px; background-color: #fdf8f9; border-radius: 12px;">
         <p style="color: #a8556f; font-size: 14px; font-weight: 600; margin: 0 0 8px 0;">ضيف الشرف</p>
         <p style="color: #2d1f26; margin: 0; font-size: 18px; font-weight: 600;">${params.event.guestName}</p>
         ${params.event.guestOrganization ? `<p style="color: #6b5a60; margin: 4px 0 0 0; font-size: 14px;">${params.event.guestOrganization}</p>` : ''}
@@ -264,7 +304,7 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
           يسعدنا إبلاغك بأنه <strong style="color: #3a7d44;">تم تأكيد تسجيلك</strong> في:
         </p>
         
-        <div style="background: linear-gradient(135deg, #fdf2f4 0%, #fff 100%); border-radius: 16px; padding: 24px; margin: 24px 0; border: 2px solid #f0e0e4;">
+        <div style="background-color: #fdf8f9; border-radius: 16px; padding: 24px; margin: 24px 0; border: 2px solid #f0e0e4;">
           <h3 style="color: #a8556f; margin: 0 0 16px 0; font-size: 22px; font-weight: 700; text-align: center;">
             ${params.event.title}
           </h3>
@@ -274,17 +314,17 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top: 16px;">
             <tr>
               <td style="text-align: center; padding: 12px;">
-                <p style="color: #a8556f; margin: 0 0 4px 0; font-size: 14px; font-weight: 600;">📅 التاريخ</p>
+                <p style="color: #a8556f; margin: 0 0 4px 0; font-size: 14px; font-weight: 600;">التاريخ</p>
                 <p style="color: #2d1f26; margin: 0; font-size: 14px;">${eventDateStr}</p>
               </td>
-              <td style="width: 1px; background: #f0e0e4;"></td>
+              <td style="width: 1px; background-color: #f0e0e4;"></td>
               <td style="text-align: center; padding: 12px;">
-                <p style="color: #a8556f; margin: 0 0 4px 0; font-size: 14px; font-weight: 600;">⏰ الوقت</p>
+                <p style="color: #a8556f; margin: 0 0 4px 0; font-size: 14px; font-weight: 600;">الوقت</p>
                 <p style="color: #2d1f26; margin: 0; font-size: 14px;">${eventTimeStr || 'غير محدد'}</p>
               </td>
-              <td style="width: 1px; background: #f0e0e4;"></td>
+              <td style="width: 1px; background-color: #f0e0e4;"></td>
               <td style="text-align: center; padding: 12px;">
-                <p style="color: #a8556f; margin: 0 0 4px 0; font-size: 14px; font-weight: 600;">📍 الموقع</p>
+                <p style="color: #a8556f; margin: 0 0 4px 0; font-size: 14px; font-weight: 600;">الموقع</p>
                 <p style="color: #2d1f26; margin: 0; font-size: 14px;">${params.event.location || 'سيتم تحديده'}</p>
               </td>
             </tr>
@@ -293,9 +333,9 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
         
         ${sponsorsHtml}
         
-        <div style="background: #e8f5e9; border-radius: 12px; padding: 16px; margin: 20px 0; border-right: 4px solid #3a7d44;">
+        <div style="background-color: #e8f5e9; border-radius: 12px; padding: 16px; margin: 20px 0; border-right: 4px solid #3a7d44;">
           <p style="color: #2e7d32; margin: 0; font-size: 15px; font-weight: 600;">
-            📎 مرفق مع هذا الإيميل دعوتك الخاصة بصيغة PDF
+            مرفق مع هذا الإيميل دعوتك الخاصة بصيغة PDF
           </p>
           <p style="color: #558b2f; margin: 8px 0 0 0; font-size: 13px;">
             يرجى إحضار الدعوة أو عرضها على جوالك عند الحضور
@@ -303,11 +343,11 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
         </div>
         
         <p style="color: #6b5a60; font-size: 15px; line-height: 1.8; margin: 16px 0;">
-          ننتظرك في هذا اللقاء المميز! 💜
+          ننتظرك في هذا اللقاء المميز!
         </p>
         
         <div style="text-align: center; margin-top: 24px;">
-          <a href="https://riyada.yplus.ai" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #a8556f 0%, #9b7b9a 100%); color: white; text-decoration: none; border-radius: 50px; font-weight: 600; font-size: 16px;">
+          <a href="https://riyada.yplus.ai" style="display: inline-block; padding: 14px 32px; background-color: #a8556f; color: white; text-decoration: none; border-radius: 50px; font-weight: 600; font-size: 16px;">
             زيارة الملتقى
           </a>
         </div>
@@ -323,14 +363,14 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>${subject}</title>
       </head>
-      <body style="direction: rtl; text-align: right; font-family: Arial, Helvetica, sans-serif; background: #f5f5f9; padding: 20px; margin: 0;">
+      <body style="direction: rtl; text-align: right; font-family: Arial, Helvetica, sans-serif; background-color: #f5f5f9; padding: 20px; margin: 0;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="direction: rtl;">
           <tr>
             <td align="center" style="padding: 0;">
-              <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+              <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%; background-color: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
                 <!-- Header -->
                 <tr>
-                  <td style="background: ${emailSettings.headerBackgroundColor || '#fdf8f9'}; padding: 32px 24px; text-align: center;">
+                  <td style="background-color: ${emailSettings.headerBackgroundColor || '#fdf8f9'}; padding: 32px 24px; text-align: center;">
                     ${emailSettings.headerLogo ? `<img src="${emailSettings.headerLogo}" alt="ملتقى ريادة" style="max-height: 80px; margin-bottom: 16px;" />` : ''}
                     <h1 style="color: ${emailSettings.headerTextColor || '#2d1f26'}; margin: 0; font-size: 28px; font-weight: bold;">ملتقى ريادة</h1>
                     <p style="color: #a8556f; font-size: 16px; margin: 8px 0 0 0;">تجمع سيدات الأعمال</p>
@@ -338,13 +378,13 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
                 </tr>
                 <!-- Content -->
                 <tr>
-                  <td style="background: #ffffff; padding: 32px 24px; direction: rtl; text-align: right;">
+                  <td style="background-color: #ffffff; padding: 32px 24px; direction: rtl; text-align: right;">
                     ${html}
                   </td>
                 </tr>
                 <!-- Footer -->
                 <tr>
-                  <td style="background: ${emailSettings.footerBackgroundColor || '#fdf8f9'}; padding: 24px; text-align: center;">
+                  <td style="background-color: ${emailSettings.footerBackgroundColor || '#fdf8f9'}; padding: 24px; text-align: center;">
                     <p style="color: ${emailSettings.footerTextColor || '#6b5a60'}; margin: 0; font-size: 14px;">${emailSettings.footerText || 'ملتقى ريادة - تجمع سيدات الأعمال'}</p>
                   </td>
                 </tr>
