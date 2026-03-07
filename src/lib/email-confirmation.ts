@@ -53,14 +53,15 @@ function formatDateArabic(date: Date): string {
   })
 }
 
-// تحويل رابط الصورة إلى base64
-async function imageToBase64(imageUrl: string): Promise<string | null> {
+// تحميل الصورة وتحويلها إلى base64 (بدون data URI prefix)
+async function fetchImageAsBase64(imageUrl: string): Promise<{ content: string; contentType: string } | null> {
   try {
-    console.log('Converting image to base64:', imageUrl)
+    console.log('Fetching image:', imageUrl)
     const response = await fetch(imageUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; RiyadaForum/1.0)'
-      }
+      },
+      signal: AbortSignal.timeout(10000) // 10 second timeout
     })
     
     if (!response.ok) {
@@ -71,9 +72,11 @@ async function imageToBase64(imageUrl: string): Promise<string | null> {
     const contentType = response.headers.get('content-type') || 'image/png'
     const buffer = await response.arrayBuffer()
     const base64 = Buffer.from(buffer).toString('base64')
-    return `data:${contentType};base64,${base64}`
+    
+    console.log('Image fetched successfully, size:', base64.length)
+    return { content: base64, contentType }
   } catch (error) {
-    console.error('Error converting image to base64:', error)
+    console.error('Error fetching image:', error)
     return null
   }
 }
@@ -89,12 +92,12 @@ async function generateInvitationPDF(params: SendConfirmationEmailParams): Promi
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
   
-  // Background gradient effect (simulated with rectangles)
-  doc.setFillColor(253, 248, 249) // #fdf8f9
+  // Background
+  doc.setFillColor(253, 248, 249)
   doc.rect(0, 0, pageWidth, pageHeight, 'F')
   
   // Header background
-  doc.setFillColor(168, 85, 111) // #a8556f
+  doc.setFillColor(168, 85, 111)
   doc.rect(0, 0, pageWidth, 50, 'F')
   
   // Title
@@ -110,7 +113,7 @@ async function generateInvitationPDF(params: SendConfirmationEmailParams): Promi
   doc.line(20, 60, pageWidth - 20, 60)
   
   // Invitation text
-  doc.setTextColor(45, 31, 38) // #2d1f26
+  doc.setTextColor(45, 31, 38)
   doc.setFontSize(24)
   doc.text('Invitation', pageWidth / 2, 80, { align: 'center' })
   
@@ -125,19 +128,17 @@ async function generateInvitationPDF(params: SendConfirmationEmailParams): Promi
   doc.text(params.event.title, pageWidth / 2, 125, { align: 'center' })
   
   // Event details box
-  doc.setFillColor(253, 242, 244) // #fdf2f4
+  doc.setFillColor(253, 242, 244)
   doc.roundedRect(20, 140, pageWidth - 40, 70, 5, 5, 'F')
   
   doc.setFontSize(12)
-  doc.setTextColor(107, 90, 96) // #6b5a60
+  doc.setTextColor(107, 90, 96)
   
-  // Date
   const eventDateStr = formatDateArabic(new Date(params.event.date))
   doc.text('Date:', 30, 160)
   doc.setTextColor(45, 31, 38)
   doc.text(eventDateStr, 70, 160)
   
-  // Time
   doc.setTextColor(107, 90, 96)
   doc.text('Time:', 30, 175)
   doc.setTextColor(45, 31, 38)
@@ -146,13 +147,11 @@ async function generateInvitationPDF(params: SendConfirmationEmailParams): Promi
     : 'TBD'
   doc.text(eventTimeStr, 70, 175)
   
-  // Location
   doc.setTextColor(107, 90, 96)
   doc.text('Location:', 30, 190)
   doc.setTextColor(45, 31, 38)
   doc.text(params.event.location || 'TBD', 70, 190)
   
-  // Guest of Honor
   if (params.event.guestName) {
     doc.setTextColor(107, 90, 96)
     doc.text('Guest of Honor:', 30, 205)
@@ -160,7 +159,6 @@ async function generateInvitationPDF(params: SendConfirmationEmailParams): Promi
     doc.text(params.event.guestName, 70, 205)
   }
   
-  // Sponsors section
   if (params.sponsors.length > 0) {
     doc.setDrawColor(200, 180, 190)
     doc.line(20, 225, pageWidth - 20, 225)
@@ -188,7 +186,6 @@ async function generateInvitationPDF(params: SendConfirmationEmailParams): Promi
   doc.setLineWidth(1)
   doc.rect(5, 5, pageWidth - 10, pageHeight - 10)
   
-  // Return base64 encoded PDF
   return doc.output('base64')
 }
 
@@ -205,7 +202,6 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
     console.log('RESEND_API_KEY exists:', !!resendApiKey)
     
     if (!resendApiKey) {
-      console.log('RESEND_API_KEY not configured, skipping email send')
       return { success: false, error: 'RESEND_API_KEY غير موجود', details: 'يجب إضافة مفتاح Resend API في متغيرات البيئة' }
     }
 
@@ -235,49 +231,70 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
     // إنشاء PDF الدعوة
     console.log('Generating invitation PDF...')
     const pdfBase64 = await generateInvitationPDF(params)
-    console.log('PDF generated successfully, size:', pdfBase64.length, 'characters')
+    console.log('PDF generated successfully')
 
-    // تحويل شعارات الرعاة إلى base64
-    console.log('Processing sponsor logos...')
-    const sponsorsWithBase64 = await Promise.all(
-      params.sponsors.map(async (s) => {
-        if (s.logoUrl) {
-          const base64Logo = await imageToBase64(s.logoUrl)
-          console.log(`Sponsor ${s.sponsorName}: base64 ${base64Logo ? 'success' : 'failed'}`)
-          return { ...s, base64Logo }
-        }
-        return { ...s, base64Logo: null }
-      })
-    )
-
-    // بناء HTML للرعاة - مع صور base64
-    let sponsorsHtml = ''
-    if (sponsorsWithBase64.length > 0) {
-      const sponsorItems = sponsorsWithBase64.map((s, index) => {
-        const uniqueId = `sponsor-${index}-${Date.now()}`
-        if (s.base64Logo) {
-          // صورة بـ base64
-          return `
-            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
-              <img src="${s.base64Logo}" alt="${s.sponsorName}" width="100" height="50" style="height: 50px; max-width: 120px; width: auto; display: block; margin: 0 auto; object-fit: contain;" />
-            </td>
-          `
-        } else {
-          // اسم فقط
-          return `
-            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
-              <span style="color: #a8556f; font-size: 14px; font-weight: 600; white-space: nowrap;">${s.sponsorName}</span>
-            </td>
-          `
-        }
-      }).join('<td style="width: 12px;"></td>\n')
+    // تحميل شعارات الرعاة
+    console.log('Fetching sponsor logos...')
+    const sponsorAttachments: Array<{
+      filename: string
+      content: string
+      content_type: string
+      content_id?: string
+    }> = []
+    
+    const sponsorItemsHtml: string[] = []
+    
+    for (let i = 0; i < params.sponsors.length; i++) {
+      const sponsor = params.sponsors[i]
+      const cid = `sponsor-logo-${i}`
       
+      if (sponsor.logoUrl) {
+        const imageData = await fetchImageAsBase64(sponsor.logoUrl)
+        
+        if (imageData) {
+          // إضافة كمرفق inline
+          sponsorAttachments.push({
+            filename: `sponsor-${i}.png`,
+            content: imageData.content,
+            content_type: imageData.contentType,
+            content_id: cid
+          })
+          
+          // استخدام cid في HTML
+          sponsorItemsHtml.push(`
+            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
+              <img src="cid:${cid}" alt="${sponsor.sponsorName}" width="100" height="50" style="height: 50px; max-width: 120px; width: auto; display: block; margin: 0 auto; object-fit: contain;" />
+            </td>
+          `)
+          console.log(`Sponsor ${sponsor.sponsorName}: attached with cid:${cid}`)
+        } else {
+          // فشل تحميل الصورة - عرض الاسم فقط
+          sponsorItemsHtml.push(`
+            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
+              <span style="color: #a8556f; font-size: 14px; font-weight: 600; white-space: nowrap;">${sponsor.sponsorName}</span>
+            </td>
+          `)
+          console.log(`Sponsor ${sponsor.sponsorName}: failed to load, showing name only`)
+        }
+      } else {
+        // لا يوجد شعار - عرض الاسم فقط
+        sponsorItemsHtml.push(`
+          <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
+            <span style="color: #a8556f; font-size: 14px; font-weight: 600; white-space: nowrap;">${sponsor.sponsorName}</span>
+          </td>
+        `)
+      }
+    }
+
+    // بناء HTML للرعاة
+    let sponsorsHtml = ''
+    if (sponsorItemsHtml.length > 0) {
       sponsorsHtml = `
         <div style="margin: 24px 0; padding: 20px; background-color: #fdf8f9; border-radius: 12px; text-align: center;">
           <p style="color: #a8556f; font-size: 16px; font-weight: 600; margin: 0 0 16px 0;">✨ برعاية</p>
           <table role="presentation" align="center" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
             <tr>
-              ${sponsorItems}
+              ${sponsorItemsHtml.join('<td style="width: 12px;"></td>\n')}
             </tr>
           </table>
         </div>
@@ -335,7 +352,7 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
         
         <div style="background-color: #e8f5e9; border-radius: 12px; padding: 16px; margin: 20px 0; border-right: 4px solid #3a7d44;">
           <p style="color: #2e7d32; margin: 0; font-size: 15px; font-weight: 600;">
-            مرفق مع هذا الإيميل دعوتك الخاصة بصيغة PDF
+            📎 مرفق مع هذا الإيميل دعوتك الخاصة بصيغة PDF
           </p>
           <p style="color: #558b2f; margin: 8px 0 0 0; font-size: 13px;">
             يرجى إحضار الدعوة أو عرضها على جوالك عند الحضور
@@ -343,7 +360,7 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
         </div>
         
         <p style="color: #6b5a60; font-size: 15px; line-height: 1.8; margin: 16px 0;">
-          ننتظرك في هذا اللقاء المميز!
+          ننتظرك في هذا اللقاء المميز! 💜
         </p>
         
         <div style="text-align: center; margin-top: 24px;">
@@ -354,7 +371,7 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
       </div>
     `
 
-    // بناء HTML الكامل مع الهيدر والفوتر
+    // بناء HTML الكامل
     const fullHtml = `
       <!DOCTYPE html>
       <html dir="rtl" lang="ar">
@@ -371,7 +388,6 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
                 <!-- Header -->
                 <tr>
                   <td style="background-color: ${emailSettings.headerBackgroundColor || '#fdf8f9'}; padding: 32px 24px; text-align: center;">
-                    ${emailSettings.headerLogo ? `<img src="${emailSettings.headerLogo}" alt="ملتقى ريادة" style="max-height: 80px; margin-bottom: 16px;" />` : ''}
                     <h1 style="color: ${emailSettings.headerTextColor || '#2d1f26'}; margin: 0; font-size: 28px; font-weight: bold;">ملتقى ريادة</h1>
                     <p style="color: #a8556f; font-size: 16px; margin: 8px 0 0 0;">تجمع سيدات الأعمال</p>
                   </td>
@@ -400,8 +416,20 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
     const fromName = 'ملتقى ريادة'
     
     console.log('From:', `${fromName} <${fromEmail}>`)
+    console.log('Total attachments:', sponsorAttachments.length + 1) // +1 for PDF
 
-    // إرسال الإيميل مع المرفق
+    // إعداد المرفقات - PDF + شعارات الرعاة
+    const allAttachments = [
+      // PDF الدعوة
+      {
+        filename: `دعوة-${params.event.title.replace(/\s+/g, '-')}.pdf`,
+        content: pdfBase64,
+        content_type: 'application/pdf'
+      },
+      // شعارات الرعاة كـ inline attachments
+      ...sponsorAttachments
+    ]
+
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -413,19 +441,13 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
         to: [params.to],
         subject: subject,
         html: fullHtml,
-        attachments: [
-          {
-            filename: `دعوة-${params.event.title.replace(/\s+/g, '-')}.pdf`,
-            content: pdfBase64,
-            content_type: 'application/pdf'
-          }
-        ]
+        attachments: allAttachments
       }),
     })
 
     const responseText = await response.text()
     console.log('Resend API response status:', response.status)
-    console.log('Resend API response:', responseText)
+    console.log('Resend API response:', responseText.substring(0, 500))
     
     if (response.ok) {
       console.log('Confirmation email sent successfully to:', params.to)
@@ -458,7 +480,6 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
 // دالة لإرسال إيميل تأكيد القبول مع جلب البيانات من قاعدة البيانات
 export async function sendConfirmationEmailForRegistration(registrationId: string): Promise<EmailResult> {
   try {
-    // جلب بيانات التسجيل والفعالية
     const registration = await db.eventRegistration.findUnique({
       where: { id: registrationId },
       include: {
@@ -483,12 +504,10 @@ export async function sendConfirmationEmailForRegistration(registrationId: strin
       return { success: false, error: 'التسجيل غير موجود' }
     }
 
-    // التحقق من البريد الإلكتروني
     if (!registration.email || registration.email.includes('placeholder.com')) {
       return { success: false, error: 'لا يوجد بريد إلكتروني صالح' }
     }
 
-    // جلب رعاة الفعالية
     const eventSponsors = await db.eventSponsor.findMany({
       where: { eventId: registration.eventId },
       include: {
@@ -510,7 +529,6 @@ export async function sendConfirmationEmailForRegistration(registrationId: strin
       websiteUrl: es.sponsor.websiteUrl,
     }))
 
-    // إرسال الإيميل
     return await sendConfirmationEmail({
       to: registration.email,
       name: registration.name,

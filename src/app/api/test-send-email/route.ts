@@ -21,14 +21,15 @@ function formatDateArabic(date: Date): string {
   })
 }
 
-// تحويل رابط الصورة إلى base64
-async function imageToBase64(imageUrl: string): Promise<string | null> {
+// تحميل الصورة وتحويلها إلى base64
+async function fetchImageAsBase64(imageUrl: string): Promise<{ content: string; contentType: string } | null> {
   try {
-    console.log('Converting image to base64:', imageUrl)
+    console.log('Fetching image:', imageUrl)
     const response = await fetch(imageUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; RiyadaForum/1.0)'
-      }
+      },
+      signal: AbortSignal.timeout(10000)
     })
     
     if (!response.ok) {
@@ -39,9 +40,11 @@ async function imageToBase64(imageUrl: string): Promise<string | null> {
     const contentType = response.headers.get('content-type') || 'image/png'
     const buffer = await response.arrayBuffer()
     const base64 = Buffer.from(buffer).toString('base64')
-    return `data:${contentType};base64,${base64}`
+    
+    console.log('Image fetched successfully, size:', base64.length)
+    return { content: base64, contentType }
   } catch (error) {
-    console.error('Error converting image to base64:', error)
+    console.error('Error fetching image:', error)
     return null
   }
 }
@@ -99,13 +102,11 @@ async function generateInvitationPDF(params: { name: string; event: any; sponsor
   doc.setFontSize(12)
   doc.setTextColor(107, 90, 96)
   
-  // Date
   const eventDateStr = formatDateArabic(new Date(params.event.date))
   doc.text('Date:', 30, 160)
   doc.setTextColor(45, 31, 38)
   doc.text(eventDateStr, 70, 160)
   
-  // Time
   doc.setTextColor(107, 90, 96)
   doc.text('Time:', 30, 175)
   doc.setTextColor(45, 31, 38)
@@ -114,13 +115,11 @@ async function generateInvitationPDF(params: { name: string; event: any; sponsor
     : 'TBD'
   doc.text(eventTimeStr, 70, 175)
   
-  // Location
   doc.setTextColor(107, 90, 96)
   doc.text('Location:', 30, 190)
   doc.setTextColor(45, 31, 38)
   doc.text(params.event.location || 'TBD', 70, 190)
   
-  // Guest of Honor
   if (params.event.guestName) {
     doc.setTextColor(107, 90, 96)
     doc.text('Guest of Honor:', 30, 205)
@@ -128,7 +127,6 @@ async function generateInvitationPDF(params: { name: string; event: any; sponsor
     doc.text(params.event.guestName, 70, 205)
   }
   
-  // Sponsors section
   if (params.sponsors.length > 0) {
     doc.setDrawColor(200, 180, 190)
     doc.line(20, 225, pageWidth - 20, 225)
@@ -182,7 +180,7 @@ export async function POST(request: NextRequest) {
 
     // جلب فعالية للاختبار
     let event = null
-    let sponsors: Array<{ sponsorId: string; sponsorName: string; logoUrl: string | null; base64Logo?: string | null }> = []
+    let sponsors: Array<{ sponsorId: string; sponsorName: string; logoUrl: string | null }> = []
 
     if (eventId) {
       event = await db.event.findUnique({
@@ -249,53 +247,75 @@ export async function POST(request: NextRequest) {
 
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
 
-    // تحويل شعارات الرعاة إلى base64
-    console.log('Processing sponsor logos...')
-    const sponsorsWithBase64 = await Promise.all(
-      sponsors.map(async (s) => {
-        if (s.logoUrl) {
-          const base64Logo = await imageToBase64(s.logoUrl)
-          console.log(`Sponsor ${s.sponsorName}: base64 ${base64Logo ? 'success' : 'failed'}`)
-          return { ...s, base64Logo }
+    // تحميل شعارات الرعاة وإضافتها كمرفقات inline
+    console.log('Fetching sponsor logos...')
+    const sponsorAttachments: Array<{
+      filename: string
+      content: string
+      content_type: string
+      content_id?: string
+    }> = []
+    
+    const sponsorItemsHtml: string[] = []
+    
+    for (let i = 0; i < sponsors.length; i++) {
+      const sponsor = sponsors[i]
+      const cid = `sponsor-logo-${i}`
+      
+      if (sponsor.logoUrl) {
+        const imageData = await fetchImageAsBase64(sponsor.logoUrl)
+        
+        if (imageData) {
+          // إضافة كمرفق inline مع content_id
+          sponsorAttachments.push({
+            filename: `sponsor-${i}.png`,
+            content: imageData.content,
+            content_type: imageData.contentType,
+            content_id: cid
+          })
+          
+          // استخدام cid في HTML
+          sponsorItemsHtml.push(`
+            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
+              <img src="cid:${cid}" alt="${sponsor.sponsorName}" width="100" height="50" style="height: 50px; max-width: 120px; width: auto; display: block; margin: 0 auto; object-fit: contain;" />
+            </td>
+          `)
+          console.log(`Sponsor ${sponsor.sponsorName}: attached with cid:${cid}`)
+        } else {
+          sponsorItemsHtml.push(`
+            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
+              <span style="color: #a8556f; font-size: 14px; font-weight: 600; white-space: nowrap;">${sponsor.sponsorName}</span>
+            </td>
+          `)
+          console.log(`Sponsor ${sponsor.sponsorName}: failed to load, showing name only`)
         }
-        return { ...s, base64Logo: null }
-      })
-    )
+      } else {
+        sponsorItemsHtml.push(`
+          <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
+            <span style="color: #a8556f; font-size: 14px; font-weight: 600; white-space: nowrap;">${sponsor.sponsorName}</span>
+          </td>
+        `)
+      }
+    }
 
     // إنشاء PDF الدعوة
     console.log('Generating PDF...')
     const pdfBase64 = await generateInvitationPDF({
       name: recipientName,
       event: event || { title: eventTitle, date: new Date(), location: eventLocation },
-      sponsors: sponsorsWithBase64
+      sponsors: sponsors
     })
     console.log('PDF generated, size:', pdfBase64.length)
 
-    // بناء HTML للرعاة مع صور base64
+    // بناء HTML للرعاة
     let sponsorsHtml = ''
-    if (sponsorsWithBase64.length > 0) {
-      const sponsorItems = sponsorsWithBase64.map((s, index) => {
-        if (s.base64Logo) {
-          return `
-            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
-              <img src="${s.base64Logo}" alt="${s.sponsorName}" width="100" height="50" style="height: 50px; max-width: 120px; width: auto; display: block; margin: 0 auto; object-fit: contain;" />
-            </td>
-          `
-        } else {
-          return `
-            <td style="background: white; padding: 16px 20px; border-radius: 8px; text-align: center; vertical-align: middle; border: 1px solid #f0e0e4;">
-              <span style="color: #a8556f; font-size: 14px; font-weight: 600; white-space: nowrap;">${s.sponsorName}</span>
-            </td>
-          `
-        }
-      }).join('<td style="width: 12px;"></td>\n')
-      
+    if (sponsorItemsHtml.length > 0) {
       sponsorsHtml = `
         <div style="margin: 24px 0; padding: 20px; background-color: #fdf8f9; border-radius: 12px; text-align: center;">
           <p style="color: #a8556f; font-size: 16px; font-weight: 600; margin: 0 0 16px 0;">✨ برعاية</p>
           <table role="presentation" align="center" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
             <tr>
-              ${sponsorItems}
+              ${sponsorItemsHtml.join('<td style="width: 12px;"></td>\n')}
             </tr>
           </table>
         </div>
@@ -353,7 +373,7 @@ export async function POST(request: NextRequest) {
         
         <div style="background-color: #e8f5e9; border-radius: 12px; padding: 16px; margin: 20px 0; border-right: 4px solid #3a7d44;">
           <p style="color: #2e7d32; margin: 0; font-size: 15px; font-weight: 600;">
-            مرفق مع هذا الإيميل دعوتك الخاصة بصيغة PDF
+            📎 مرفق مع هذا الإيميل دعوتك الخاصة بصيغة PDF
           </p>
           <p style="color: #558b2f; margin: 8px 0 0 0; font-size: 13px;">
             يرجى إحضار الدعوة أو عرضها على جوالك عند الحضور
@@ -361,7 +381,7 @@ export async function POST(request: NextRequest) {
         </div>
         
         <p style="color: #6b5a60; font-size: 15px; line-height: 1.8; margin: 16px 0;">
-          ننتظرك في هذا اللقاء المميز!
+          ننتظرك في هذا اللقاء المميز! 💜
         </p>
         
         <div style="text-align: center; margin-top: 24px;">
@@ -412,6 +432,18 @@ export async function POST(request: NextRequest) {
       </html>
     `
 
+    // إعداد المرفقات - PDF + شعارات الرعاة
+    const allAttachments = [
+      {
+        filename: `دعوة-${eventTitle.replace(/\s+/g, '-')}.pdf`,
+        content: pdfBase64,
+        content_type: 'application/pdf'
+      },
+      ...sponsorAttachments
+    ]
+
+    console.log('Total attachments:', allAttachments.length)
+
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -423,26 +455,20 @@ export async function POST(request: NextRequest) {
         to: [recipientEmail],
         subject: `تم تأكيد تسجيلك في ${eventTitle} 👑`,
         html: fullHtml,
-        attachments: [
-          {
-            filename: `دعوة-${eventTitle.replace(/\s+/g, '-')}.pdf`,
-            content: pdfBase64,
-            content_type: 'application/pdf'
-          }
-        ]
+        attachments: allAttachments
       }),
     })
 
     const responseText = await response.text()
     console.log('Resend response status:', response.status)
-    console.log('Resend response:', responseText)
+    console.log('Resend response:', responseText.substring(0, 500))
 
     if (response.ok) {
       return NextResponse.json({ 
         success: true, 
         message: `تم إرسال الإيميل بنجاح إلى ${recipientEmail}`,
         sponsors: sponsors.length,
-        sponsorsWithLogos: sponsorsWithBase64.filter(s => s.base64Logo).length,
+        sponsorsWithLogos: sponsorAttachments.length,
         event: eventTitle,
         response: responseText
       })
