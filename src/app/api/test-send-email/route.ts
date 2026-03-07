@@ -280,6 +280,9 @@ export async function POST(request: NextRequest) {
       </html>
     `
 
+    // إنشاء اسم ملف آمن (إنجليزي)
+    const safeFileName = `riyada-invitation-${Date.now()}.pdf`
+    
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -293,9 +296,9 @@ export async function POST(request: NextRequest) {
         html: fullHtml,
         attachments: [
           {
-            filename: `دعوة-${eventTitle.replace(/\s+/g, '-')}.pdf`,
+            filename: safeFileName,
             content: pdfBase64,
-            content_type: 'application/pdf'
+            contentType: 'application/pdf'
           }
         ]
       }),

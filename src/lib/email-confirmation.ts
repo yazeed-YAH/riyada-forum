@@ -296,6 +296,9 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
     
     console.log('From:', `${fromName} <${fromEmail}>`)
 
+    // إنشاء اسم ملف آمن (إنجليزي)
+    const safeFileName = `riyada-invitation-${Date.now()}.pdf`
+    
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -309,9 +312,9 @@ export async function sendConfirmationEmail(params: SendConfirmationEmailParams)
         html: fullHtml,
         attachments: [
           {
-            filename: `دعوة-${params.event.title.replace(/\s+/g, '-')}.pdf`,
+            filename: safeFileName,
             content: pdfBase64,
-            content_type: 'application/pdf'
+            contentType: 'application/pdf'
           }
         ]
       }),
