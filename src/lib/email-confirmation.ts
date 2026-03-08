@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import jsPDF from 'jspdf'
-import Resend from 'resend'
+import { Resend } from 'resend'
 
 interface EventData {
   id: string
