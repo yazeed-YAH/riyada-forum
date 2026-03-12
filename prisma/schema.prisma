@@ -1,0 +1,197 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// الأحداث/اللقاءات
+model Event {
+  id          String   @id @default(cuid())
+  title       String   // عنوان اللقاء
+  description String?  // وصف اللقاء
+  date        DateTime // تاريخ اللقاء
+  startTime   String?  // وقت بداية الحدث
+  endTime     String?  // وقت الانتهاء
+  location    String?  // الموقع
+  imageUrl    String?  // صورة اللقاء
+  status      String   @default("open") // open, closed, ended, archived
+  
+  // نوع اللقاء
+  eventType   String   @default("public") // public, private
+  
+  // حالة النشر
+  isPublished Boolean  @default(false) // منشور أو غير منشور
+  
+  // موعد إغلاق التسجيل
+  registrationDeadline DateTime?
+  
+  // بيانات الضيف
+  guestName         String?  // اسم الضيف
+  guestImage        String?  // صورة الضيف
+  guestOrganization String?  // اسم الجهة
+  guestPosition     String?  // المنصب
+  guestTwitter      String?  // تويتر
+  guestInstagram    String?  // انستغرام
+  guestLinkedIn     String?  // لينكد إن
+  guestSnapchat     String?  // سناب شات
+  
+  // إعدادات التسجيل
+  capacity          Int      @default(50) // السعة القصوى
+  maxCompanions     Int      @default(0) // الحد الأقصى للمرافقين
+  registrationType  String   @default("registration") // registration, invitation
+  sendQR            Boolean  @default(false) // إرسال QR
+  
+  // إعدادات العرض للزوار
+  showCountdown           Boolean @default(true)  // العد التنازلي
+  showRegistrantCount     Boolean @default(true)  // عدد المسجلين
+  showGuestProfile        Boolean @default(true)  // ملف الضيف
+  showHospitalityPreference Boolean @default(true)  // الرغبة في الضيافة
+  
+  // إعدادات خدمة الفالية
+  valetServiceEnabled   Boolean  @default(false) // تفعيل خدمة الفالية
+  parkingCapacity       Int?     // سعة مواقف السيارات
+  carRetrievalTime      String?  // وقت احضار السيارة
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // العلاقات
+  registrations EventRegistration[]
+  sponsorRequests SponsorRequest[]
+  eventSponsors EventSponsor[]
+}
+
+// تسجيلات الحضور
+model EventRegistration {
+  id           String   @id @default(cuid())
+  eventId      String
+  memberId     String?  // رابط بالعضو المسجل (اختياري)
+  name         String   // الاسم الكامل
+  email        String   // البريد الإلكتروني
+  phone        String?  // رقم الجوال
+  companyName  String?  // اسم الشركة/المنشأة
+  jobTitle     String?  // المسمى الوظيفي
+  gender       String?  @default("female") // الجنس: male, female
+  imageUrl     String?  // صورة العضو
+  interests    String?  // مجالات الاهتمام
+  expectations String?  // التوقعات من الملتقى
+  status       String   @default("pending") // pending, confirmed, attended, cancelled
+  notes        String?  // ملاحظات
+  registrationSource String? @default("manual") // مصدر التسجيل: manual, website
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  event  Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  member Member? @relation(fields: [memberId], references: [id], onDelete: SetNull)
+}
+
+// طلبات الرعاية
+model SponsorRequest {
+  id              String   @id @default(cuid())
+  eventId         String?  // يمكن أن يكون لحدث معين أو عام
+  companyName     String   // اسم الشركة أو الفرد
+  contactName     String   // اسم المسؤول
+  email           String   // البريد الإلكتروني
+  phone           String   // رقم الجوال
+  sponsorshipType String   // نوع الرعاية: financial, technical, media, marketing, knowledge, in_kind
+  sponsorType     String?  // نوع الراعي: individual, company
+  description     String?  // وصف الرعاية المقدمة
+  amount          Float?   // القيمة المالية (إن وجدت)
+  logoUrl         String?  // رابط شعار الشركة
+  instagram       String?  // حساب انستغرام
+  twitter         String?  // حساب تويتر
+  snapchat        String?  // حساب سناب شات
+  tiktok          String?  // حساب تيك توك
+  linkedin        String?  // حساب لينكد إن
+  websiteUrl      String?  // رابط الموقع الإلكتروني
+  profileUrl      String?  // رابط ملف البروفايل PDF
+  socialLinks     String?  // روابط التواصل الاجتماعي (مجمعة)
+  status          String   @default("new") // new, contacted, completed, interested_again, interested_permanent, archived, cancelled
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  event Event? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  eventSponsors EventSponsor[]
+  notes SponsorNote[]
+}
+
+// ملاحظات الرعاة
+model SponsorNote {
+  id        String   @id @default(cuid())
+  sponsorId String
+  content   String   // محتوى الملاحظة
+  authorName String  // اسم من أضاف الملاحظة
+  createdAt DateTime @default(now())
+
+  sponsor SponsorRequest @relation(fields: [sponsorId], references: [id], onDelete: Cascade)
+}
+
+// ربط الرعاة بالفعاليات مع تحديد المهام
+model EventSponsor {
+  id          String   @id @default(cuid())
+  eventId     String   // معرف الفعالية
+  sponsorId   String   // معرف الراعي
+  tasks       String?  // مهام الرعاية المحددة لهذا الراعي
+  notes       String?  // ملاحظات إضافية
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event   Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sponsor SponsorRequest @relation(fields: [sponsorId], references: [id], onDelete: Cascade)
+}
+
+// الأعضاء المسجلين
+model Member {
+  id          String   @id @default(cuid())
+  name        String   // الاسم الكامل
+  email       String   @unique // البريد الإلكتروني
+  phone       String?  // رقم الجوال
+  password    String?  // كلمة المرور (اختياري - للأعضاء المسجلين يدوياً)
+  companyName String?  // اسم الشركة/المنشأة
+  jobTitle    String?  // المسمى الوظيفي
+  businessType String? // نوع النشاط
+  interests   String?  // مجالات الاهتمام
+  gender      String?  @default("female") // الجنس: male, female
+  imageUrl    String?  // صورة العضو
+  // السوشل ميديا
+  twitter     String?  // تويتر
+  instagram   String?  // انستغرام
+  linkedin    String?  // لينكد إن
+  snapchat    String?  // سناب شات
+  wantsSponsorship Boolean @default(false) // هل يرغب في تقديم الرعاية
+  sponsorshipTypes String? // أنواع الرعاية المفضلة
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // العلاقات
+  registrations EventRegistration[]
+}
+
+// المسؤولين عن الموقع
+model Admin {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String?
+  role      String   @default("admin") // admin, super_admin
+  // الصلاحيات التفصيلية
+  permissions String? @default("{\"events\":true,\"members\":true,\"registrations\":true,\"sponsors\":true,\"settings\":false,\"export\":false}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// إعدادات الموقع
+model SiteSettings {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+}
